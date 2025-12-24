@@ -30,7 +30,7 @@ checkpoint_config:
   type: file_system
   output_dir: /home/chenkaiyuan/models/agentic-ckpt/${exp_name}
 
-num_gpus_per_node: 8
+num_gpus_per_node: 4
 
 max_steps: 1024
 save_steps: 25
@@ -38,7 +38,7 @@ logging_steps: 1
 eval_steps: 10
 resume_from_checkpoint: false
 
-rollout_batch_size: 256
+rollout_batch_size: 180
 val_batch_size: 128
 sequence_length: 16384
 
@@ -52,10 +52,9 @@ init_kl_coef: 0.0
 whiten_advantages: true
 entropy_loss_coef: 0
 max_grad_norm: 1.0
-do_validation: true
+do_validation: false
 
-pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
-reward_pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
+pretrain: /home/chenkaiyuan/.cache/modelscope/hub/models/Qwen/Qwen3-30B-A3B-Instruct-2507
 
 actor_train:
   model_args:
@@ -70,7 +69,7 @@ actor_train:
     gradient_accumulation_steps: 256
     warmup_steps: 0
     warmup_ratio: 0
-    lr_scheduler_type: cosine
+    lr_scheduler_type: constant
   strategy_args:
 #    strategy_name: deepspeed_train
 #    strategy_config: ${deepspeed_zero3}
@@ -81,7 +80,7 @@ actor_train:
       expert_model_parallel_size: 1
       use_distributed_optimizer: true
       recompute_granularity: full
-  device_mapping: list(range(0,4))
+  device_mapping: list([2,3,4,5])
   infer_batch_size: 4
 
 actor_infer:
@@ -90,10 +89,10 @@ actor_infer:
     dtype: bf16
   generating_args:
     max_new_tokens: ${max_tokens_per_step} # single-turn response length
-    top_p: 0.99
+    top_p: 0.95
     top_k: 100
     num_beams: 1
-    temperature: 0.99
+    temperature: 0.6
     num_return_sequences: 1
   #   stop_strings: ["</code>"]
   # strategy_args:
@@ -106,22 +105,7 @@ actor_infer:
     strategy_name: sglang
     strategy_config:
       mem_fraction_static: 0.8
-  device_mapping: list(range(0,4))
-
-reference:
-  model_args:
-    attn_implementation: fa2
-    disable_gradient_checkpointing: true
-    dtype: bf16
-    model_type: ~
-  strategy_args:
-    strategy_name: megatron_infer
-    strategy_config:
-      tensor_model_parallel_size: 4
-      pipeline_model_parallel_size: 1
-      expert_model_parallel_size: 1
-  device_mapping: list(range(0,4))
-  infer_batch_size: 4
+  device_mapping: list([2,3,4,5])
 
 reward_normalization:
   grouping: traj_group_id # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
@@ -129,18 +113,11 @@ reward_normalization:
 
 train_env_manager:
   max_env_num_per_worker: 32
-  num_env_groups: 32
+  num_env_groups: 30
   # under the same group, the env config and env seed are ensured to be equal
-  group_size: 8
-  tags: [dapo_17k_with_python_code]
-  num_groups_partition: [32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
-
-val_env_manager:
-  max_env_num_per_worker: 32
-  num_env_groups: 128
-  group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [dapo_17k_with_python_code]
-  num_groups_partition: [128] # TODO: If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  group_size: 6
+  tags: [dapo_17k]
+  num_groups_partition: [30] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 # Here, you can override variables defined in the imported envs. max_tokens_per_step: 128 in custom_env.SimpleSokoban, here replaced by 64
 max_tokens_per_step: 4096
@@ -152,4 +129,3 @@ custom_envs:
     ${gem_math.dapo_17k}
   dapo_17k_with_python_code:
     ${gem_math.dapo_17k_with_python_code}
-

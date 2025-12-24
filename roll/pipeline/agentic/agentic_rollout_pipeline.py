@@ -18,6 +18,8 @@ from roll.utils.functionals import (
     reduce_metrics,
 )
 from roll.utils.logging import get_logger
+from datetime import datetime
+import time
 
 logger = get_logger()
 
@@ -47,7 +49,7 @@ class AgenticRolloutPipeline(BasePipeline):
             env_manager_config=self.pipeline_config.train_env_manager,
             resource_manager=self.resource_manager,
             infer_cluster=self.actor_infer,
-            mode="train",
+            mode="val",
         )
 
         if self.use_policy_model:
@@ -55,6 +57,8 @@ class AgenticRolloutPipeline(BasePipeline):
 
     @torch.no_grad()
     def run(self):
+        start_time = time.time()  # 时间戳格式
+        start_time_str = datetime.fromtimestamp(start_time).strftime('%Y-%m-%d-%H%M%S')  # 格式化时间字符串
 
         for global_step in (count() if self.pipeline_config.max_steps == -1 else range(self.pipeline_config.max_steps)):
             logger.info(f"pipeline rollout global step {global_step} start...")
@@ -63,8 +67,9 @@ class AgenticRolloutPipeline(BasePipeline):
             batch.meta_info = {"global_step": global_step}
 
             with Timer(name="rollout", logger=None) as rollout_timer:
-                batch.meta_info["is_offload_states"] = True
-                self.actor_infer.start_server(data=batch)
+                if self.use_policy_model:
+                    batch.meta_info["is_offload_states"] = True
+                    self.actor_infer.start_server(data=batch)
                 batch = ray.get(self.rollout_scheduler.get_batch.remote(batch, self.pipeline_config.rollout_batch_size))
                 if batch is None:
                     break
@@ -101,34 +106,73 @@ class AgenticRolloutPipeline(BasePipeline):
                         filename=os.path.join(timeline_dir, f"timeline-step-{global_step}.json"),
                     )
 
-                prompt_mask = batch.batch["prompt_mask"]
-                non_prompt_mask = torch.logical_not(batch.batch["prompt_mask"])
-                input_ids = batch.batch["input_ids"]
-                prompt_ids = torch.where(
-                    prompt_mask.bool(), input_ids, torch.full_like(input_ids, self.tokenizer.pad_token_id)
-                )
-                response_ids = torch.where(
-                    non_prompt_mask.bool(), input_ids, torch.full_like(input_ids, self.tokenizer.pad_token_id)
-                )
+                log_res = []
+                batch_grouped = batch.group_by(keys="traj_id")
+                for group_name, group_batch in batch_grouped.items():
+                    prompt_mask = group_batch.batch["prompt_mask"]
+                    non_prompt_mask = torch.logical_not(group_batch.batch["prompt_mask"]) * group_batch.batch["attention_mask"]
+                    input_ids = group_batch.batch["input_ids"]
+                    prompt_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(prompt_mask)]
+                    response_ids_list = [input_ids[i][mask.bool()] for i, mask in enumerate(non_prompt_mask)]
+                    prompts = self.tokenizer.batch_decode(prompt_ids_list, skip_special_tokens=False)
+                    responses = self.tokenizer.batch_decode(response_ids_list, skip_special_tokens=False)
+                    episode_scores = group_batch.non_tensor_batch["episode_scores"].tolist()
+                    step_scores = group_batch.non_tensor_batch["step_scores"].tolist()
+                    example_ids = group_batch.non_tensor_batch["example_ids"].tolist()
+                    answers = group_batch.non_tensor_batch["answers"].tolist()
+                    model_answers = group_batch.non_tensor_batch["model_answers"].tolist()
+                    traj_ids = group_batch.non_tensor_batch["traj_id"]
+                    traj_group_ids = group_batch.non_tensor_batch["traj_group_id"]
+                    if not isinstance(step_scores[0], float):
+                        step_scores = [t.tolist() for t in step_scores]
 
-                generate_res = []
-                prompts = self.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
-                responses = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
-                episode_scores = batch.non_tensor_batch["episode_scores"].tolist()
-                for prompt, prompt_id, response, response_id, episode_score in zip(
-                    prompts, prompt_ids, responses, response_ids, episode_scores
-                ):
-                    generate_res.append(
-                        {
-                            "prompt": prompt,
-                            "response": response,
-                            "episode_score": episode_score,
-                        }
-                    )
-                logger.info(json.dumps(generate_res[:10], ensure_ascii=False))
+                    for example_id, prompt, response, answer, model_answer, episode_score, step_score, traj_id, traj_group_id in zip(
+                            example_ids, prompts, responses, answers, model_answers, episode_scores, step_scores, traj_ids, traj_group_ids
+                    ):
+                        log_res.append(
+                            {
+                                "example_id": example_id,
+                                "prompt": prompt,
+                                "response": response,
+                                "answer": answer,
+                                "model_answer": model_answer,
+                                "episode_score": episode_score,
+                                "step_score": step_score,
+                                "traj_id": traj_id,
+                                "traj_group_id": traj_group_id,
+                            }
+                        )
+                try:
+                    self.save_to_jsonl(log_res, '/home/chenkaiyuan/ROLL_Rollout/agentic_val_rollout/'+start_time_str, f"rollout-{global_step}.json")
+                except Exception as e:
+                    logger.error(f"Error saving rollout result: {e}")
+                
+                logger.info(json.dumps(log_res[:10], ensure_ascii=False))
                 logger.info(json.dumps(metrics, ensure_ascii=False))
 
             logger.info(f"pipeline step {global_step} finished")
             global_step += 1
         ray.get(self.rollout_scheduler.shutdown.remote())
         logger.info("pipeline complete!")
+
+    def save_to_jsonl(self, data, folder_path, file_name):
+        # 1. 检查文件夹是否存在
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)  # 创建文件夹（递归创建）
+
+        # 2. 构造完整文件路径
+        file_path = os.path.join(folder_path, file_name)
+
+        # 3. 保存数据到 JSONL 文件
+        with open(file_path, 'w', encoding='utf-8') as f:
+            if isinstance(data, list):  # 如果数据是列表，逐行写入每个字典
+                for item in data:
+                    json.dump(item, f, ensure_ascii=False)
+                    f.write('\n')  # 每个 JSON 对象占一行
+            elif isinstance(data, dict):  # 如果数据是单个字典，直接写入一行
+                json.dump(data, f, ensure_ascii=False)
+                f.write('\n')
+            else:
+                raise ValueError("数据必须是字典或列表类型")
+        
+        print(f"Rollout result is saved to {file_path}..")

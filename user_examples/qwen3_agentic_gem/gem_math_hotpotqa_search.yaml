@@ -6,7 +6,7 @@ hydra:
     dir: .
   output_subdir: null
 
-exp_name: "agentic_pipeline"
+exp_name: "agentic_hotpotqa_search"
 seed: 42
 logging_dir: ./output/logs
 output_dir: ./output
@@ -28,23 +28,23 @@ output_dir: ./output
 
 track_with: tensorboard
 tracker_kwargs:
-  log_dir: /data/oss_bucket_0/yali/llm/tensorboard/roll_exp/agentic_sokoban
+  log_dir: /home/chenkaiyuan/ROLL-RL/users/tensorboard/roll_exp/agentic_rlvr
 
 checkpoint_config:
   type: file_system
-  output_dir: /data/cpfs_0/rl_examples/models/${exp_name}
+  output_dir: /home/chenkaiyuan/models/agentic-ckpt/${exp_name}
 
 num_gpus_per_node: 8
 
 max_steps: 1024
-save_steps: 10000
+save_steps: 50
 logging_steps: 1
 eval_steps: 10
 resume_from_checkpoint: false
 
-rollout_batch_size: 128
+rollout_batch_size: 16
 val_batch_size: 128
-sequence_length: 12800
+sequence_length: 16384
 
 advantage_clip: 20
 ppo_epochs: 1
@@ -57,8 +57,8 @@ whiten_advantages: true
 entropy_loss_coef: 0
 max_grad_norm: 1.0
 
-pretrain: Qwen/Qwen3-4B-Base
-reward_pretrain: Qwen/Qwen3-4B-Base
+pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Thinking-2507/snapshots/768f209d9ea81521153ed38c47d515654e938aea
+reward_pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Thinking-2507/snapshots/768f209d9ea81521153ed38c47d515654e938aea
 
 actor_train:
   model_args:
@@ -78,13 +78,13 @@ actor_train:
 #    strategy_config: ${deepspeed_zero3}
     strategy_name: megatron_train
     strategy_config:
-      tensor_model_parallel_size: 1
+      tensor_model_parallel_size: 4
       pipeline_model_parallel_size: 1
       expert_model_parallel_size: 1
       use_distributed_optimizer: true
       recompute_granularity: full
-  device_mapping: list(range(0,8))
-  infer_batch_size: 1
+  device_mapping: list(range(4,8))
+  infer_batch_size: 2
 
 actor_infer:
   model_args:
@@ -97,15 +97,30 @@ actor_infer:
     num_beams: 1
     temperature: 0.99
     num_return_sequences: 1
-    stop_strings: ["</search>"]
+    # stop_strings: ["</search>"]
+  # strategy_args:
+  #   strategy_name: vllm
+  #   strategy_config:
+  #     gpu_memory_utilization: 0.8
+  #     block_size: 16
+  #     load_format: auto
   strategy_args:
-    strategy_name: vllm
+    strategy_name: sglang
     strategy_config:
-      gpu_memory_utilization: 0.8
-      block_size: 16
-      load_format: auto
-  device_mapping: list(range(0,8))
+      mem_fraction_static: 0.8
+  device_mapping: list(range(4,8))
 
+# reference:
+#   model_args:
+#     attn_implementation: fa2
+#     disable_gradient_checkpointing: true
+#     dtype: bf16
+#     model_type: ~
+#   strategy_args:
+#     strategy_name: hf_infer
+#     strategy_config: ~
+#   device_mapping: list(range(0,8))
+#   infer_batch_size: 1
 reference:
   model_args:
     attn_implementation: fa2
@@ -113,9 +128,12 @@ reference:
     dtype: bf16
     model_type: ~
   strategy_args:
-    strategy_name: hf_infer
-    strategy_config: ~
-  device_mapping: list(range(0,8))
+    strategy_name: megatron_infer
+    strategy_config:
+      tensor_model_parallel_size: 4
+      pipeline_model_parallel_size: 1
+      expert_model_parallel_size: 1
+  device_mapping: list(range(4,8))
   infer_batch_size: 1
 
 reward_normalization:
@@ -124,11 +142,11 @@ reward_normalization:
 
 train_env_manager:
   max_env_num_per_worker: 32
-  num_env_groups: 128
+  num_env_groups: 16
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
   tags: [HotpotQA_with_search]
-  num_groups_partition: [128] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  num_groups_partition: [16] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 val_env_manager:
   max_env_num_per_worker: 32

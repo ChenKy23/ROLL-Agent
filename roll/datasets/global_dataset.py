@@ -64,6 +64,8 @@ class GlobalDataset:
         self.dataset = self.dataset.filter(function, **kwargs)
         self.filter_names.add(filter_name)
 
+    # async def process(self, function: Optional[Callable] = None, load_from_cache_file: bool = True):
+    #     self.dataset = self.dataset.map(function, load_from_cache_file=load_from_cache_file)
 
 @ray.remote
 class GlobalDatasetManager:

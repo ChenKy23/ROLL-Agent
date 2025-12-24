@@ -18,15 +18,16 @@ class PythonCodeTool(GEMPythonCodeTool):
         super().__init__(timeout, sandbox_type, keep_error_last_line)
         self.tool_instruction = ("Initially, when solving a question, you would need to think step by step, without the ability to use code for calculation. "
             "Now, you have the capability to write code to use the code interpreter for calculation. "
-            "The code will be executed by a sandbox, and the result can be returned to enhance your reasoning process. your calculation while still maintaining the reasoning process."
-            "The thinking process can ""have multiple code snippets. Each code snippet is wrapped with: <code>...</code>, and should be executable."
-            "Details:"
-            "1. Identify sections where code execution could speed up the reasoning process or make the calculation more accurate."
-            "2. Replace the manual calculation steps with code snippets and the corresponding interpreter's execution results."
-            "3. Keep the logical flow of the reasoning process intact, including any failed exploration attempts that were part of the initial process."
-            "4. The code snippets should be complete scripts, including necessary imports, and should not contain markdown symbols like <python>...‹/python>."
-            "5. Outputs in the code snippets must explicitly call the print function."
-            "6. Execution results should match the model's output exactly, with no extra or missing tokens.")
+            "The code will be executed by a sandbox, and the result can be returned to enhance your reasoning process. Your calculation while still maintaining the reasoning process. "
+            "The thinking process can ""have multiple code snippets. Each code snippet is wrapped with: <code>...</code>, and should be executable. "
+            "Details:\n"
+            "1. Identify sections where code execution could speed up the reasoning process or make the calculation more accurate.\n"
+            "2. Replace the manual calculation steps with code snippets and the corresponding interpreter's execution results.\n"
+            "3. Keep the logical flow of the reasoning process intact, including any failed exploration attempts that were part of the initial process.\n"
+            "4. The code snippets should be complete scripts, including necessary imports, and should not contain markdown symbols like <python>...‹/python>.\n"
+            "5. Outputs in the code snippets must explicitly call the print function.\n"
+            "6. Execution results should match the model's output exactly, with no extra or missing tokens.\n"
+            "7. You may repeat the <code> steps as many times as needed.\n")
         self.patterns = [r"<code>(.*?)</code>", r"```\n?python(.*?)```"]
         if tool_instruction:
             self.tool_instruction = tool_instruction

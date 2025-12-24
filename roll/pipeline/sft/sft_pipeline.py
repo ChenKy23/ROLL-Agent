@@ -17,22 +17,32 @@ from roll.pipeline.sft.sft_config import SFTConfig
 from roll.utils.constants import IGNORE_INDEX
 from roll.utils.logging import get_logger
 from roll.utils.metrics.metrics_manager import MetricsManager
-
+from roll.pipeline.agentic.env_manager.token_mask_utils import messages_to_tokens_and_masks
+import json
 
 logger = get_logger()
 
 
 # TODO: support packing
-def preprocess_dataset(dataset, prompt_len, encode_func, num_proc):
+def preprocess_dataset(dataset, sequence_length, encode_func, num_proc):
     logger.info(f"Begin process dataset: {dataset}")
     dataset = dataset.map(
         encode_func,
-        batched=True,
+        batched=False,
         num_proc=num_proc,
         desc="Encoding dataset",
         load_from_cache_file=False,
     )
+    logger.info(f"Len of dataset after encoding: {len(dataset)}")
+    # 过滤cutoff
+    dataset = dataset.filter(
+        lambda data_i: 5 < len(data_i["input_ids"]) <= sequence_length,
+        num_proc=num_proc,
+        desc="Filtering dataset",
+    )
+    logger.info(f"Len of dataset after fitering: {len(dataset)}")
     logger.info(f"Encoding: {dataset}")
+    logger.info(f"data[0]: {[dataset[0]]}")
     return dataset
 
 
@@ -80,6 +90,58 @@ def get_encode_function(template_name, tokenizer, prompt_key, query_key, respons
 
     return encode_function
 
+def batch_get_message_encode_function(tokenizer, message_key="messages"):
+    tokenized_encodings = []
+    def encode_function(data_i):
+        messages_list = data_i[message_key]
+        assert isinstance(messages_list, list) and all(isinstance(item, str) for item in messages_list)
+        for i, messages in enumerate(messages_list):
+            messages = json.loads(messages)
+            input_ids_list, input_ids_list_mask = messages_to_tokens_and_masks(messages, tokenizer)
+            assert len(input_ids_list) == len(input_ids_list_mask)
+            merged_input_ids, merged_input_ids_mask = [], []
+            for input_ids, input_ids_mask in zip(input_ids_list, input_ids_list_mask):
+                merged_input_ids.extend(input_ids)
+                merged_input_ids_mask.extend(input_ids_mask)
+            assert len(merged_input_ids) == len(merged_input_ids_mask)
+            label = torch.tensor(merged_input_ids)
+            merged_input_ids_mask = torch.tensor(merged_input_ids_mask)
+            label[merged_input_ids_mask == 0] = IGNORE_INDEX
+            attention_mask = [1] * len(merged_input_ids)
+            tokenized_encoding = {
+                "input_ids": merged_input_ids,
+                "attention_mask": attention_mask,
+                "labels": label.tolist()
+            }
+            tokenized_encodings.append(tokenized_encoding)
+
+        return {key: [tokenized_encoding[key] for tokenized_encoding in tokenized_encodings] for key in tokenized_encodings[0].keys()}
+
+    return encode_function
+
+def get_message_encode_function(tokenizer, message_key="messages"):
+    def encode_function(data_i):
+        messages = json.loads(data_i[message_key])
+        input_ids_list, input_ids_list_mask = messages_to_tokens_and_masks(messages, tokenizer)
+        assert len(input_ids_list) == len(input_ids_list_mask)
+        merged_input_ids, merged_input_ids_mask = [], []
+        for input_ids, input_ids_mask in zip(input_ids_list, input_ids_list_mask):
+            merged_input_ids.extend(input_ids)
+            merged_input_ids_mask.extend(input_ids_mask)
+        assert len(merged_input_ids) == len(merged_input_ids_mask)
+        label = torch.tensor(merged_input_ids)
+        merged_input_ids_mask = torch.tensor(merged_input_ids_mask)
+        label[merged_input_ids_mask == 0] = IGNORE_INDEX
+        attention_mask = [1] * len(merged_input_ids)
+        tokenized_encoding = {
+            "input_ids": merged_input_ids,
+            "attention_mask": attention_mask,
+            "labels": label.tolist()
+        }
+
+        return tokenized_encoding
+
+    return encode_function
 
 class SFTPipeline(BasePipeline):
     def __init__(self, pipeline_config: SFTConfig):
@@ -113,7 +175,9 @@ class SFTPipeline(BasePipeline):
                                               self.pipeline_config.prompt_key, 
                                               self.pipeline_config.query_key, 
                                               self.pipeline_config.response_key, 
-                                              self.pipeline_config.system_key)
+                                              self.pipeline_config.system_key) if self.pipeline_config.message_key is None \
+                            else get_message_encode_function(self.tokenizer, 
+                                                             self.pipeline_config.message_key)
         self.dataset = preprocess_dataset(
             self.dataset, 
             self.pipeline_config.sequence_length, 

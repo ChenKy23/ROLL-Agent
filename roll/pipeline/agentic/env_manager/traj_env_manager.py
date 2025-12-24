@@ -280,6 +280,20 @@ class TrajEnvManager(BaseEnvManager):
         """
 
         """
+        example_id = ""
+        if "example_id" in rollout_cache.history[0]:
+            example_id = rollout_cache.history[0]["example_id"]
+        
+        answer = ""
+        if "answer" in rollout_cache.history[0]:
+            answer = rollout_cache.history[0]["answer"]
+        
+        model_answer = "-1"
+        for his_item in rollout_cache.history[::-1]:
+            if "model_answer" in his_item:
+                model_answer = his_item["model_answer"]
+                break
+
         if 'observation' in rollout_cache.history[-1]:
             rollout_cache.history.pop(-1)
         history = rollout_cache.history[:-1]
@@ -344,6 +358,9 @@ class TrajEnvManager(BaseEnvManager):
             "frames": np.array([self.rollout_cache.frames], dtype=object),
             "step_scores": np.array([scores], dtype=object),
             "episode_scores": np.array([episode_score], dtype=object),
+            "example_ids": np.array([example_id], dtype=object),
+            "answers": np.array([answer], dtype=object),
+            "model_answers": np.array([model_answer], dtype=object),
         })
 
         metrics_agg_mode = self.rollout_cache.history[-1].get('metrics_agg_mode', {})

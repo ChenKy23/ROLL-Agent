@@ -1,4 +1,4 @@
-max_tokens_per_step: 128
+max_tokens_per_step: 4096
 max_actions_per_traj: 10
 
 env_manager_cls: roll.pipeline.agentic.env_manager.traj_env_manager.TrajEnvManager
@@ -68,10 +68,11 @@ gem_qa:
     agent_system_template: ${qa_agent_system_template}
     agent_template: ${qa_agent_template}
     env_config:
-      dataset_name: axon-rl/HotpotQA
+      dataset_name: /home/chenkaiyuan/evaluation_datasets/2wikiqa360.jsonl
       split: train
-      question_key: problem
+      question_key: question
       answer_key: answer
+      mode: val
   HotpotQA_with_mcp:
     env_type: "roll_qa"
     max_steps: ${max_actions_per_traj}
@@ -81,7 +82,7 @@ gem_qa:
     agent_template: ${qa_agent_template}
     max_env_step_concurrent: 10
     env_config:
-      dataset_name: axon-rl/HotpotQA
+      dataset_name: /home/chenkaiyuan/evaluation_datasets/2wikiqa360.jsonl
       split: train
       question_key: problem
       answer_key: answer
@@ -89,11 +90,11 @@ gem_qa:
       wrapper_args:
         tool_reward: 0.0
         tool_success_reward: 0.2
-        max_tool_uses: 1
+        max_tool_uses: 5
       tool_configs:
         - tool_id: mcp
           tool_args:
-            server_url: xxx
+            server_url: "https://mcp.api-inference.modelscope.net/00c27f2978ef4b/sse"
   HotpotQA_with_search:
     env_type: "roll_qa"
     max_steps: ${max_actions_per_traj}
@@ -103,19 +104,43 @@ gem_qa:
     agent_template: ${qa_agent_template}
     max_env_step_concurrent: 10
     env_config:
-      dataset_name: axon-rl/HotpotQA
+      dataset_name: /home/chenkaiyuan/evaluation_datasets/musique300.jsonl
       split: train
-      question_key: problem
+      question_key: question
       answer_key: answer
+      mode: val
     tool_wrapper:
       wrapper_args:
         tool_reward: 0.0
         tool_success_reward: 0.0
-        max_tool_uses: 1
+        max_tool_uses: 10
       tool_configs:
         - tool_id: search
           tool_args:
-            search_url: http://localhost:8000/retrieve
+            search_url: http://localhost:8001/retrieve
+  tool_qa_with_search:
+    env_type: "roll_qa"
+    max_steps: ${max_actions_per_traj}
+    max_tokens_per_step: ${max_tokens_per_step}
+    env_manager_cls: ${env_manager_cls}
+    agent_system_template: ${qa_agent_system_template}
+    agent_template: ${qa_agent_template}
+    max_env_step_concurrent: 10
+    env_config:
+      dataset_name: /home/chenkaiyuan/evaluation_datasets/tool_rl_qa.jsonl
+      split: train
+      question_key: question
+      answer_key: answer
+      mode: train
+    tool_wrapper:
+      wrapper_args:
+        tool_reward: 0.0
+        tool_success_reward: 0.1
+        max_tool_uses: 10
+      tool_configs:
+        - tool_id: search
+          tool_args:
+            search_url: http://localhost:8001/retrieve
 
 qa_agent_system_template: You're a helpful assistant.
 qa_agent_template: "{observation}"

@@ -98,6 +98,7 @@ class AgenticConfig(PPOConfig):
     step_reward_weight: float = field(default=1.0, metadata={"help": "Step reward weight, used in GiGPO."})
     step_reward_gamma: float = field(default=0.95, metadata={"help": "Gamma parameter for step reward calculation"})
 
+    do_validation: bool = field(default=False, metadata={"help": "Whether to do validation."})
     def __post_init__(self):
         super().__post_init__()
 
@@ -124,13 +125,15 @@ class AgenticConfig(PPOConfig):
 
         assert self.max_steps > 0 or self.max_steps == -1, "max_steps must be greater than 0 or -1"
 
+        self.custom_envs = DictConfig(self.custom_envs)
         self.train_env_manager.model_args.model_name_or_path = self.pretrain
         self.train_env_manager.generating_args = self.actor_infer.generating_args
-        self.val_env_manager.model_args.model_name_or_path = self.pretrain
-        self.val_env_manager.generating_args = self.actor_infer.generating_args
-        self.custom_envs = DictConfig(self.custom_envs)
         self.make_env_configs(self.train_env_manager)
-        self.make_env_configs(self.val_env_manager)
+        
+        if self.do_validation:
+            self.val_env_manager.model_args.model_name_or_path = self.pretrain
+            self.val_env_manager.generating_args = self.actor_infer.generating_args
+            self.make_env_configs(self.val_env_manager)
 
         train_env_num = self.train_env_manager.num_env_groups * self.train_env_manager.group_size
         traj_per_env = (self.rollout_batch_size + train_env_num - 1) // train_env_num
@@ -142,15 +145,16 @@ class AgenticConfig(PPOConfig):
         logger.info(f"train_env_manager.max_traj_per_env: {self.train_env_manager.max_traj_per_env}")
         assert self.train_env_manager.max_traj_per_env >= traj_per_env, f"max_traj_per_env must be >= {traj_per_env}"
 
-        val_env_num = self.val_env_manager.num_env_groups * self.val_env_manager.group_size
-        if self.val_batch_size < 0:
-            self.val_env_manager.max_traj_per_env = sys.maxsize
-        else:
-            traj_per_env = (self.val_batch_size + val_env_num - 1) // val_env_num
-            if self.val_env_manager.max_traj_per_env < 0:
-                self.val_env_manager.max_traj_per_env = traj_per_env
-        logger.info(f"val_env_manager.max_traj_per_env: {self.val_env_manager.max_traj_per_env}")
-        assert self.val_env_manager.max_traj_per_env >= traj_per_env, f"max_traj_per_env must be >= {traj_per_env}"
+        if self.do_validation:
+            val_env_num = self.val_env_manager.num_env_groups * self.val_env_manager.group_size
+            if self.val_batch_size < 0:
+                self.val_env_manager.max_traj_per_env = sys.maxsize
+            else:
+                traj_per_env = (self.val_batch_size + val_env_num - 1) // val_env_num
+                if self.val_env_manager.max_traj_per_env < 0:
+                    self.val_env_manager.max_traj_per_env = traj_per_env
+            logger.info(f"val_env_manager.max_traj_per_env: {self.val_env_manager.max_traj_per_env}")
+            assert self.val_env_manager.max_traj_per_env >= traj_per_env, f"max_traj_per_env must be >= {traj_per_env}"
 
     def make_env_configs(self, env_manager_config: EnvManagerConfig):
         # construct env configs

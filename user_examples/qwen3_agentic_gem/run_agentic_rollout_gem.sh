@@ -40,4 +40,4 @@ done
 echo "Ray cluster started successfully."
 
 CONFIG_PATH=$(basename $(dirname $0))
-python user_examples/start_sft_pipeline.py --config_path $CONFIG_PATH  --config_name sft_config
+python user_examples/start_agentic_rollout_pipeline.py --config_path $CONFIG_PATH --config_name gem_math_code_rollout

@@ -1,12 +1,13 @@
 defaults:
   - ../config/traj_envs_gem_math@_here_
+  - ../config/traj_envs_gem_qa@_here_
 
 hydra:
   run:
     dir: .
   output_subdir: null
 
-exp_name: "agentic_math_code"
+exp_name: "agentic_tool_rl"
 seed: 42
 logging_dir: ./output/logs
 output_dir: ./output
@@ -24,7 +25,7 @@ output_dir: ./output
 
 track_with: tensorboard
 tracker_kwargs:
-  log_dir: /home/chenkaiyuan/ROLL-RL/users/tensorboard/roll_exp/agentic_rlvr
+  log_dir: /home/chenkaiyuan/ROLL-RL/users/tensorboard/roll_exp/agentic_sft_rlvr
 
 checkpoint_config:
   type: file_system
@@ -33,12 +34,12 @@ checkpoint_config:
 num_gpus_per_node: 8
 
 max_steps: 1024
-save_steps: 25
+save_steps: 50
 logging_steps: 1
 eval_steps: 10
 resume_from_checkpoint: false
 
-rollout_batch_size: 256
+rollout_batch_size: 512
 val_batch_size: 128
 sequence_length: 16384
 
@@ -52,10 +53,10 @@ init_kl_coef: 0.0
 whiten_advantages: true
 entropy_loss_coef: 0
 max_grad_norm: 1.0
-do_validation: true
+do_validation: false
 
-pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
-reward_pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
+pretrain: /home/chenkaiyuan/models/sft-ckpt/qwen-sft-config/20251212-150044/checkpoint-350-hf
+reward_pretrain: /home/chenkaiyuan/models/sft-ckpt/qwen-sft-config/20251212-150044/checkpoint-350-hf
 
 actor_train:
   model_args:
@@ -81,7 +82,7 @@ actor_train:
       expert_model_parallel_size: 1
       use_distributed_optimizer: true
       recompute_granularity: full
-  device_mapping: list(range(0,4))
+  device_mapping: list([1,4,5,6])
   infer_batch_size: 4
 
 actor_infer:
@@ -95,18 +96,11 @@ actor_infer:
     num_beams: 1
     temperature: 0.99
     num_return_sequences: 1
-  #   stop_strings: ["</code>"]
-  # strategy_args:
-  #   strategy_name: vllm
-  #   strategy_config:
-  #     gpu_memory_utilization: 0.8
-  #     block_size: 16
-  #     load_format: auto
   strategy_args:
     strategy_name: sglang
     strategy_config:
       mem_fraction_static: 0.8
-  device_mapping: list(range(0,4))
+  device_mapping: list([1,4,5,6])
 
 reference:
   model_args:
@@ -120,7 +114,7 @@ reference:
       tensor_model_parallel_size: 4
       pipeline_model_parallel_size: 1
       expert_model_parallel_size: 1
-  device_mapping: list(range(0,4))
+  device_mapping: list([1,4,5,6])
   infer_batch_size: 4
 
 reward_normalization:
@@ -129,27 +123,32 @@ reward_normalization:
 
 train_env_manager:
   max_env_num_per_worker: 32
-  num_env_groups: 32
+  num_env_groups: 64
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 8
-  tags: [dapo_17k_with_python_code]
-  num_groups_partition: [32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
-
-val_env_manager:
-  max_env_num_per_worker: 32
-  num_env_groups: 128
-  group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [dapo_17k_with_python_code]
-  num_groups_partition: [128] # TODO: If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  tags: [tool_math_with_python_code, tool_qa_with_search]
+  num_groups_partition: [32, 32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 # Here, you can override variables defined in the imported envs. max_tokens_per_step: 128 in custom_env.SimpleSokoban, here replaced by 64
 max_tokens_per_step: 4096
 
-math_agent_system_template: Please reason step by step, and put your final answer within '\\boxed{}', e.g. \\boxed{{A}}..
+math_agent_system_template: Please reason step by step, and put your final answer within '\\boxed{}', e.g. \\boxed{{A}}.
 math_agent_template: "{observation}\nEnsure that your response includes the format of '\\boxed{{answer}}', e.g. \\boxed{{A}}."
+qa_agent_system_template: You're a helpful assistant.
+qa_agent_template: "{observation}"
 custom_envs:
   dapo_17k:
     ${gem_math.dapo_17k}
   dapo_17k_with_python_code:
     ${gem_math.dapo_17k_with_python_code}
-
+  HotpotQA:
+    ${gem_qa.HotpotQA}
+  HotpotQA_with_mcp:
+    ${gem_qa.HotpotQA_with_mcp}
+  HotpotQA_with_search:
+    ${gem_qa.HotpotQA_with_search}
+  tool_math_with_python_code:
+    ${gem_math.tool_math_with_python_code}
+  tool_qa_with_search:
+    ${gem_qa.tool_qa_with_search}
+  

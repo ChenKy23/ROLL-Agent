@@ -13,6 +13,8 @@ import ray
 from roll.datasets.global_dataset import GlobalDataset, GlobalDatasetManager
 from roll.utils.constants import RAY_NAMESPACE
 
+from math_verify import parse, verify
+
 logger = logging.getLogger(__name__)
 
 class MathEnv(GEMMathEnv):
@@ -22,6 +24,7 @@ class MathEnv(GEMMathEnv):
             dataset_name: Optional[str] = "",
             split: Optional[str] = None,
             dataset: Optional[Dataset] = None,
+            id_key: str = "id",
             question_key: str = "problem",
             answer_key: str = "answer",
             seed: int = 0,
@@ -32,6 +35,7 @@ class MathEnv(GEMMathEnv):
         self.seed = seed
         self.question_key = question_key
         self.answer_key = answer_key
+        self.id_key = id_key
         self.mode = mode
 
         # Convert train/val mode to sample/traversal for GlobalDataset
@@ -59,7 +63,10 @@ class MathEnv(GEMMathEnv):
         self.first_obs = data[self.question_key]
         self.answer = data[self.answer_key]
         self.idx += 1
-        return self.first_obs, {"env_instruction": ""}
+        example_id = ""
+        if self.id_key in data:
+            example_id = data[self.id_key]
+        return self.first_obs, {"env_instruction": "", "example_id": example_id, "answer": self.answer}
 
     def step(
         self, action: str
@@ -71,7 +78,7 @@ class MathEnv(GEMMathEnv):
             action_is_valid = False
         else:
             res = self.mp_pool.apply_async(
-                self.check_correct, (model_answer, self.answer)
+                self.robust_check_correct, (model_answer, self.answer)
             )
             try:
                 is_correct = res.get(timeout=1)
@@ -91,6 +98,35 @@ class MathEnv(GEMMathEnv):
         }
         info = {
             "metrics": metrics,
-            "metrics_agg_mode": metrics_agg_mode
+            "metrics_agg_mode": metrics_agg_mode,
+            "model_answer": model_answer if model_answer is not None else ""
         }
         return TERMINAL_STATE, reward, True, True, info
+    
+    @staticmethod
+    def robust_check_correct(model_answer: str, gt_answer: str) -> bool:
+        """Check if the action is correct."""
+        if not model_answer.startswith("\\boxed{"):
+            model_answer = "\\boxed{" + model_answer + "}"
+        if not gt_answer.startswith("\\boxed{"):
+            gt_answer = "\\boxed{" + gt_answer + "}"
+        # parse with math_verify
+        model_answer = parse(model_answer)
+
+        # get correct answers from the dataset entry
+        if isinstance(gt_answer, (str, float, int)):
+            correct_answers = [str(gt_answer)]
+        elif isinstance(gt_answer, list):
+            correct_answers = gt_answer
+        else:
+            raise ValueError(f"Unexpected answer type: {type(gt_answer)}")
+
+        # check against all possible correct answers
+        # (math_verify.parse handles extraction e.g. from \\boxed{...})
+        is_correct = False
+        for correct_answer in correct_answers:
+            correct_answer = parse(str(correct_answer))
+            if verify(correct_answer, model_answer):
+                is_correct = True
+                break
+        return is_correct

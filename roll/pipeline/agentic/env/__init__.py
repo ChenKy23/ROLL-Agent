@@ -10,7 +10,7 @@ gem.register("sokoban", entry_point="roll.pipeline.agentic.env.sokoban:SokobanEn
 gem.register("frozen_lake", entry_point="roll.pipeline.agentic.env.frozen_lake:FrozenLakeEnv")
 gem.register("roll_math", entry_point="roll.pipeline.agentic.env.gem.math_env:MathEnv")
 gem.register("roll_code", entry_point="roll.pipeline.agentic.env.gem.code_env:CodeEnv")
-gem.register("roll_qa", entry_point="roll.pipeline.agentic.env.gem.qa_env:QaEnv")
+gem.register("roll_qa", entry_point="roll.pipeline.agentic.env.gem.wikiqa_env:QaEnv")
 gem.register("sokoban_sandbox", entry_point="roll.pipeline.agentic.env.sandbox:SokobanSandboxEnv")
 
 

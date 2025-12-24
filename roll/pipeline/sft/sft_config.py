@@ -34,6 +34,10 @@ class SFTConfig(BaseConfig):
         default="output",
         metadata={"help": "the key of response in dataset"}
     )
+    message_key: str = field(
+        default="messages",
+        metadata={"help": "the key of response in dataset"}
+    )
     
     # role related
     validation: WorkerConfig = field(
