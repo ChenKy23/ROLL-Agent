@@ -113,15 +113,15 @@ gem_math:
     agent_template: ${math_agent_template}
     env_config:
       max_steps: ${max_actions_per_traj}
-      dataset_name: /home/chenkaiyuan/evaluation_datasets/amc23.jsonl
+      dataset_name: /home/zhengguangmin/Kaiyuan/ROLL-Agent/data/dapo_math_250.jsonl
       split: train
-      question_key: question
-      answer_key: answer
-      mode: val
+      question_key: prompt
+      answer_key: solution
+      mode: train
     tool_wrapper:
       wrapper_args:
         tool_reward: 0
-        tool_success_reward: 0
+        tool_success_reward: 0.1
         max_tool_uses: 5
       tool_configs:
         - tool_id: python_code
@@ -138,7 +138,7 @@ gem_math:
     agent_template: ${math_agent_template}
     env_config:
       max_steps: ${max_actions_per_traj}
-      dataset_name: /home/chenkaiyuan/evaluation_datasets/tool_rl_math.jsonl
+      dataset_name: /home/zhengguangmin/Kaiyuan/evaluation_datasets/tool_rl_math.jsonl
       split: train
       question_key: question
       answer_key: answer
@@ -146,8 +146,8 @@ gem_math:
     tool_wrapper:
       wrapper_args:
         tool_reward: 0
-        tool_success_reward: 0.1
-        max_tool_uses: 5
+        tool_success_reward: 0.0
+        max_tool_uses: 10
       tool_configs:
         - tool_id: python_code
           tool_args:

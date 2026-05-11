@@ -25,7 +25,9 @@ from roll.utils.constants import GenerateStopReason
 from roll.utils.functionals import pad_to_length, aggregate_metrics
 from roll.utils.logging import get_logger
 from roll.utils.str_utils import contains_renderable_field
+from roll.utils.logging import get_logger
 
+logger = get_logger()
 
 class TrajEnvManager(BaseEnvManager):
     def __init__(self,
@@ -307,19 +309,26 @@ class TrajEnvManager(BaseEnvManager):
         token_ids = []
         prompt_masks = []
         response_masks = []
+        step_lengths = []
         for items in self.rollout_cache.history:
             token_ids.extend(items["prompt_ids"])
             token_ids.extend(items["response_ids"])
             prompt_masks.extend([1] * len(items["prompt_ids"]) + [0] * len(items["response_ids"]))
             response_masks.extend([0] * len(items["prompt_ids"]) + [1] * len(items["response_ids"]))
+            step_lengths.append(len(items["prompt_ids"]) + len(items["response_ids"]))
 
-        input_ids =torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
+        if self.pipeline_config.sequence_length > len(token_ids):
+            step_lengths.append(self.pipeline_config.sequence_length - len(token_ids))
+        
+        step_lengths = torch.tensor(step_lengths, dtype=torch.long).unsqueeze(0)
+
+        input_ids = torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
         attention_mask = torch.tensor([1] * len(token_ids), dtype=torch.long).unsqueeze(0)
         response_mask = torch.tensor(response_masks, dtype=torch.bool).unsqueeze(0)
 
         first_response_idx = response_masks.index(1)
         prompt_masks = [1] * first_response_idx + [0] * (len(token_ids) - first_response_idx)
-        prompt_mask =torch.tensor(prompt_masks, dtype=torch.bool).unsqueeze(0)
+        prompt_mask = torch.tensor(prompt_masks, dtype=torch.bool).unsqueeze(0)
         score_tensor = torch.tensor([0] * len(token_ids), dtype=torch.float).unsqueeze(0)
         score_tensor[0][-1] = episode_score
         position_ids = attention_mask.cumsum(dim=-1)
@@ -342,6 +351,7 @@ class TrajEnvManager(BaseEnvManager):
         response_mask = pad_to_length(response_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         prompt_mask = pad_to_length(prompt_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         score_tensor = pad_to_length(score_tensor, length=self.pipeline_config.sequence_length, pad_value=0)
+        step_lengths = pad_to_length(step_lengths, length=self.env_config.max_steps+3, pad_value=0)
 
         lm_input.batch.update({
             "input_ids": input_ids,
@@ -350,6 +360,7 @@ class TrajEnvManager(BaseEnvManager):
             "response_mask": response_mask,
             "prompt_mask": prompt_mask,
             "scores": score_tensor,
+            "step_lengths": step_lengths,
         })
         lm_input.non_tensor_batch.update({
             "env_ids": np.array([self.rollout_cache.env_id], dtype=object),

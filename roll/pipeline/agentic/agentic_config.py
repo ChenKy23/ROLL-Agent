@@ -99,12 +99,17 @@ class AgenticConfig(PPOConfig):
     step_reward_gamma: float = field(default=0.95, metadata={"help": "Gamma parameter for step reward calculation"})
 
     do_validation: bool = field(default=False, metadata={"help": "Whether to do validation."})
+    use_positive_weight: bool = field(default=False, metadata={"help": "Whether to use positive loss."})
+    use_negative_weight: bool = field(default=False, metadata={"help": "Whether to use negative loss."})
+    use_weighted_loss_only: bool = field(default=False, metadata={"help": "Whether to use step loss only."})
+    use_difficulty_weight: bool = field(default=False, metadata={"help": "Whether to use difficulty weight."})
+    step_loss_coef: float = field(default=1.0, metadata={"help": "Step loss weight."})
     def __post_init__(self):
         super().__post_init__()
 
         # default worker_cls
         if self.actor_train.worker_cls is None:
-            self.actor_train.worker_cls = "roll.pipeline.base_worker.ActorWorker"
+            self.actor_train.worker_cls =  "roll.pipeline.agentic.agentic_worker.ActorWorker" #"roll.pipeline.agentic.agentic_worker.ActorWorker"
         if self.actor_infer.worker_cls is None:
             self.actor_infer.worker_cls = "roll.pipeline.base_worker.ActorWorker"
         if self.reference.worker_cls is None:

@@ -105,7 +105,13 @@ class SgLangStrategy(InferenceStrategy):
             {"additional_special_tokens": special_tokens}, replace_additional_special_tokens=False
         )
         logger.info(f"add {special_tokens} to additional_special_tokens: {self.tokenizer.additional_special_tokens}")
-        self.event_loop = asyncio.get_event_loop()
+        try:
+            self.event_loop = asyncio.get_event_loop()
+            if self.event_loop.is_closed():
+                raise RuntimeError("Event loop is closed")
+        except RuntimeError:
+            self.event_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.event_loop)
 
     def op_compute_log_probs(self, logits: torch.Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor):
         pass

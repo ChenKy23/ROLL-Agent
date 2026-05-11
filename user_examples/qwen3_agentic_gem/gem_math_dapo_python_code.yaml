@@ -6,6 +6,9 @@ hydra:
     dir: .
   output_subdir: null
 
+system_envs:
+  USE_MODELSCOPE: '1'
+
 exp_name: "agentic_math_code"
 seed: 42
 logging_dir: ./output/logs
@@ -24,23 +27,23 @@ output_dir: ./output
 
 track_with: tensorboard
 tracker_kwargs:
-  log_dir: /home/chenkaiyuan/ROLL-RL/users/tensorboard/roll_exp/agentic_rlvr
+  log_dir: /home/zhengguangmin/Kaiyuan/ROLL/users/tensorboard/roll_exp/agentic_rlvr
 
 checkpoint_config:
   type: file_system
-  output_dir: /home/chenkaiyuan/models/agentic-ckpt/${exp_name}
+  output_dir: /home/zhengguangmin/Kaiyuan/models/agentic-ckpt/${exp_name}
 
 num_gpus_per_node: 8
 
 max_steps: 1024
-save_steps: 25
+save_steps: 50
 logging_steps: 1
 eval_steps: 10
 resume_from_checkpoint: false
 
 rollout_batch_size: 256
-val_batch_size: 128
-sequence_length: 16384
+# val_batch_size: 256
+sequence_length: 12000
 
 advantage_clip: 20
 ppo_epochs: 1
@@ -50,12 +53,17 @@ adv_estimator: "reinforce"
 #dual_clip_loss: True
 init_kl_coef: 0.0
 whiten_advantages: true
-entropy_loss_coef: 0
+entropy_loss_coef: 0.0
 max_grad_norm: 1.0
-do_validation: true
+do_validation: false
+use_positive_weight: false
+use_negative_weight: true
+use_weighted_loss_only: false
+use_difficulty_weight: true
+step_loss_coef: 0.1
 
-pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
-reward_pretrain: /home/chenkaiyuan/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
+pretrain: Qwen/Qwen3-1.7B
+reward_pretrain: Qwen/Qwen3-1.7B
 
 actor_train:
   model_args:
@@ -66,8 +74,8 @@ actor_train:
   training_args:
     learning_rate: 1.0e-6
     weight_decay: 0
-    per_device_train_batch_size: 1
-    gradient_accumulation_steps: 256
+    per_device_train_batch_size: 4
+    gradient_accumulation_steps: 64
     warmup_steps: 0
     warmup_ratio: 0
     lr_scheduler_type: cosine
@@ -76,12 +84,12 @@ actor_train:
 #    strategy_config: ${deepspeed_zero3}
     strategy_name: megatron_train
     strategy_config:
-      tensor_model_parallel_size: 4
+      tensor_model_parallel_size: 2
       pipeline_model_parallel_size: 1
       expert_model_parallel_size: 1
       use_distributed_optimizer: true
       recompute_granularity: full
-  device_mapping: list(range(0,4))
+  device_mapping: list([4,7])
   infer_batch_size: 4
 
 actor_infer:
@@ -106,7 +114,7 @@ actor_infer:
     strategy_name: sglang
     strategy_config:
       mem_fraction_static: 0.8
-  device_mapping: list(range(0,4))
+  device_mapping: list([4,7])
 
 reference:
   model_args:
@@ -117,10 +125,10 @@ reference:
   strategy_args:
     strategy_name: megatron_infer
     strategy_config:
-      tensor_model_parallel_size: 4
+      tensor_model_parallel_size: 2
       pipeline_model_parallel_size: 1
       expert_model_parallel_size: 1
-  device_mapping: list(range(0,4))
+  device_mapping: list([4,7])
   infer_batch_size: 4
 
 reward_normalization:

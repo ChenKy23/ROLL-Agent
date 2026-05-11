@@ -17,7 +17,7 @@ from roll.distributed.scheduler.protocol import DataProto
 from roll.models.model_providers import default_tokenizer_provider
 from roll.pipeline.agentic.agentic_config import AgenticConfig, EnvManagerConfig
 from roll.pipeline.agentic.utils import (dump_rollout_render, compute_discounted_returns,
-                                         compute_response_level_rewards, dump_rollout_trajectories)
+                                         compute_response_level_rewards, grouped_difficulty_compute, dump_rollout_trajectories)
 from roll.pipeline.base_pipeline import BasePipeline
 from roll.utils.constants import RAY_NAMESPACE
 from roll.utils.functionals import (
@@ -28,6 +28,9 @@ from roll.utils.functionals import (
     RunningMoments,
     compute_clip_fraction,
     agg_loss,
+    segment_sum,
+    trim_trailing_zeros,
+    masked_minmax_norm_robust
 )
 from roll.utils.kl_controller import get_kl_controller
 from roll.utils.logging import get_logger
@@ -252,6 +255,11 @@ class AgenticPipeline(BasePipeline):
                 metrics.update(kl_metrics)
                 metrics["time/adv"] = timer.last
 
+                batch = self.compute_step_weight(batch)
+                scores_to_group = DataProto.from_dict({"scores": batch.batch["scores"].clone().sum(dim=-1)})
+                scores_to_group.non_tensor_batch = batch.non_tensor_batch
+                batch.batch["grouped_difficulty"] = grouped_difficulty_compute(scores_to_group, grouping="traj_group_id")
+
                 if self.pipeline_config.adv_estimator == "gae":
                     critic_train_metrics_refs: List[ray.ObjectRef] = self.critic.train_step(batch, blocking=False)
 
@@ -261,6 +269,14 @@ class AgenticPipeline(BasePipeline):
                     actor_train_metrics_refs = self.actor_train.train_step(batch, blocking=False)
                     actor_train_metrics: DataProto = DataProto.materialize_concat(data_refs=actor_train_metrics_refs)
                     metrics.update(reduce_metrics(actor_train_metrics.meta_info.pop("metrics", {})))
+
+                # with Timer(name="cal_cur_log_probs", logger=None) as cal_timer:
+                #     cur_log_probs_refs: List[ray.ObjectRef] = self.actor_train.compute_log_probs(batch, blocking=False)
+                #     cur_log_probs = DataProto.materialize_concat(data_refs=cur_log_probs_refs)
+                #     batch.batch["cur_log_probs"] = cur_log_probs.batch["log_probs"]
+                #     avg_cur_log_prob = masked_mean(batch.batch["cur_log_probs"], batch.batch["response_mask"][:, 1:])
+                #     metrics.update({"critic/cur_log_prob/mean": avg_cur_log_prob.item()})
+                # metrics["time/cur_log_probs_values_reward"] = cal_timer.last
 
                 if self.pipeline_config.adv_estimator == "gae":
                     critic_train_metrics = DataProto.materialize_concat(data_refs=critic_train_metrics_refs)
@@ -325,7 +341,7 @@ class AgenticPipeline(BasePipeline):
                             }
                         )
                 try:
-                    self.save_to_jsonl(log_res, '/home/chenkaiyuan/ROLL_Rollout/agentic_rl_rollout/'+start_time_str, f"rollout-{global_step}.json")
+                    self.save_to_jsonl(log_res, '/home/zhengguangmin/Kaiyuan/ROLL_Rollout/agentic_rl_rollout/'+start_time_str, f"rollout-{global_step}.json")
                 except Exception as e:
                     logger.error(f"Error saving rollout result: {e}")
 
@@ -366,6 +382,52 @@ class AgenticPipeline(BasePipeline):
                 raise ValueError("数据必须是字典或列表类型")
         
         print(f"Rollout result is saved to {file_path}..")
+
+    def compute_step_weight(self, batch: "DataProto") -> "DataProto":
+        ref_log_probs = batch.batch["ref_log_probs"].clone()
+        old_log_probs = batch.batch["old_log_probs"].clone()
+        response_mask = batch.batch["response_mask"][:, 1:].long()
+        step_lengths = batch.batch["step_lengths"].clone()
+        step_lengths[:, 0] -= 1
+        step_lengths = trim_trailing_zeros(step_lengths)
+        # logger.info(f"step_lengths: {step_lengths}")
+        
+        total_scores = batch.batch["scores"][:, 1:].long().sum(-1)
+        positive_mask = (total_scores >= 1.0).unsqueeze(-1).expand_as(response_mask) * response_mask
+        negtive_mask = (total_scores < 1.0).unsqueeze(-1).expand_as(response_mask) * response_mask
+        # batch.batch["positive_mask"] = positive_mask
+        # batch.batch["negtive_mask"] = negtive_mask
+        # logger.info(f"shape of response_mask: {response_mask.shape}")
+        # logger.info(f"shape of positive_mask: {positive_mask.shape}")
+        # logger.info(f"shape of negtive_mask: {negtive_mask.shape}")
+        response_step_lengths = segment_sum(response_mask, step_lengths)
+        # logger.info(f"response_step_lengths: {response_step_lengths.tolist()}")
+        positive_response_step_lengths = segment_sum(positive_mask, step_lengths)
+        # logger.info(f"positive_response_step_lengths: {positive_response_step_lengths.tolist()}")
+        negtive_response_step_lengths = segment_sum(negtive_mask, step_lengths)
+        # logger.info(f"negtive_response_step_lengths: {negtive_response_step_lengths.tolist()}")
+        batch.batch["response_step_lengths"] = response_step_lengths
+        # batch.batch["positive_response_step_lengths"] = positive_response_step_lengths
+        # batch.batch["negtive_response_step_lengths"] = negtive_response_step_lengths
+
+        diff_log_probs = (old_log_probs - ref_log_probs) * response_mask
+        step_diff_log_probs_sum = segment_sum(diff_log_probs, step_lengths)
+        # logger.info(f"step_diff_log_probs_sum: {step_diff_log_probs_sum.tolist()}")
+        step_ref_log_probs_sum = segment_sum(diff_log_probs, step_lengths)
+        # logger.info(f"step_ref_log_probs_sum: {step_ref_log_probs_sum.tolist()}")
+        step_diff_log_probs_mean = (step_diff_log_probs_sum / response_step_lengths.clamp(min=1.0)) * (response_step_lengths != 0).to(step_diff_log_probs_sum.dtype)
+        # logger.info(f"step_diff_log_probs_mean: {step_diff_log_probs_mean.tolist()}")
+        step_ref_log_probs_mean = (step_ref_log_probs_sum / response_step_lengths.clamp(min=1.0)) * (response_step_lengths != 0).to(step_ref_log_probs_sum.dtype)
+        # logger.info(f"step_ref_log_probs_mean: {step_ref_log_probs_mean.tolist()}")
+        # batch.batch["step_diff_log_probs_mean"] = step_diff_log_probs_mean
+        # batch.batch["step_ref_log_probs_mean"] = step_ref_log_probs_mean
+        step_diff_pos_weights = masked_minmax_norm_robust(x=step_diff_log_probs_mean, mask=positive_response_step_lengths, eps=1e-8, constant_value=1.0)
+        # logger.info(f"step_diff_pos_weights: {step_diff_pos_weights.tolist()}")
+        step_ref_neg_weights = masked_minmax_norm_robust(x=step_ref_log_probs_mean, mask=negtive_response_step_lengths, eps=1e-8, constant_value=1.0)
+        # logger.info(f"step_ref_neg_weights: {step_ref_neg_weights.tolist()}")
+        batch.batch["step_diff_pos_weights"] = step_diff_pos_weights
+        batch.batch["step_ref_neg_weights"] = step_ref_neg_weights
+        return batch
 
     def val(self, global_step):
         batch = DataProto()
@@ -506,6 +568,22 @@ def compute_data_metrics(batch):
     returns = batch.batch["returns"]
     non_prompt_mask = (torch.logical_not(batch.batch["prompt_mask"]) * batch.batch["attention_mask"]).float().sum(-1)
 
+    ref_log_probs = batch.batch["ref_log_probs"]
+    old_log_probs = batch.batch["old_log_probs"]
+    diff_ref_cur_log_probs = old_log_probs - ref_log_probs
+    total_scores = batch.batch["scores"][:, 1:].long().sum(-1)
+    # logger.info(f"total_scores: {total_scores}")
+    
+    positive_mask = (total_scores >= 1.0).unsqueeze(-1).expand_as(response_mask)
+    negtive_mask = (total_scores < 1.0).unsqueeze(-1).expand_as(response_mask)
+    final_positive_mask = positive_mask * response_mask
+    final_negtive_mask = negtive_mask * response_mask
+
+    # logger.info(f"shape of response_mask: {response_mask.shape}")
+    # logger.info(f"shape of positive_mask: {positive_mask.shape}")
+    # logger.info(f"shape of negtive_mask: {negtive_mask.shape}")
+    # logger.info(f"positive_mask: {positive_mask[:20,:10]}")
+
     # 从 batch 中提取 traj_rollout_time 相关指标
     # traj_rollout_times = []
     metrics = {
@@ -552,6 +630,12 @@ def compute_data_metrics(batch):
         "env/traj_env_time/max": torch.max(traj_env_times).detach().item() if traj_env_times.numel() > 0 else 0.0,
         "env/traj_env_time/min": torch.min(traj_env_times).detach().item() if traj_env_times.numel() > 0 else 0.0,
 
+        "critic/ref_pos_log_prob/mean": masked_mean(ref_log_probs, final_positive_mask).detach().item(),
+        "critic/ref_neg_log_prob/mean": masked_mean(ref_log_probs, final_negtive_mask).detach().item(),
+        "critic/old_pos_log_prob/mean": masked_mean(old_log_probs, final_positive_mask).detach().item(),
+        "critic/old_neg_log_prob/mean": masked_mean(old_log_probs, final_negtive_mask).detach().item(),
+        "critic/diff_ref_cur_pos_log_prob/mean": masked_mean(diff_ref_cur_log_probs, final_positive_mask).detach().item(),
+        "critic/diff_ref_cur_neg_log_prob/mean": masked_mean(diff_ref_cur_log_probs, final_negtive_mask).detach().item(),
     }
 
     if "values" in batch.batch.keys():

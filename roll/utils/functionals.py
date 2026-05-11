@@ -923,3 +923,175 @@ def group_reward_norm(data: "DataProto", n_sample=-1, div_std=True, div_std_glob
             reshape_reward = reshape_reward / (torch.std(reshape_reward) + 1e-6)
     data.batch["response_level_rewards"] = reshape_reward.reshape(*response_level_rewards.size())
     return data
+
+def segment_sum(tensor, segment_lengths):
+    B, F = tensor.shape
+    device = tensor.device
+    dtype = tensor.dtype
+
+    # 1. 处理空分段
+    processed = [seg if len(seg) > 0 else [F] for seg in segment_lengths]
+    max_segments = max(len(seg) for seg in processed)
+
+    seg_len = torch.zeros(B, max_segments, device=device, dtype=torch.long)
+    for b, seg in enumerate(processed):
+        seg_len[b, :len(seg)] = torch.tensor(seg, device=device)
+
+    assert (seg_len.sum(dim=1) == F).all()
+
+    # 2. segment 右边界
+    seg_ends = seg_len.cumsum(dim=1)  # (B, S)
+
+    # 3. 每个位置属于哪个 segment
+    pos = torch.arange(F, device=device).unsqueeze(0).expand(B, F)
+    seg_ids = torch.searchsorted(seg_ends, pos, right=True)  # (B, F)
+
+    # 4. 分段求和
+    out = torch.zeros(B, max_segments, device=device, dtype=dtype)
+    out.scatter_add_(1, seg_ids, tensor)
+
+    return out
+
+def segment_lengths_by_last_one(mask: torch.Tensor):
+    """
+    mask: (B, L) 0/1 tensor
+    return: List[List[int]]
+    """
+    B, L = mask.shape
+    device = mask.device
+
+    b_idx, pos = torch.nonzero(mask, as_tuple=True)
+
+    result = [[] for _ in range(B)]
+
+    # ========== 情况 1：整个 batch 都没有 1 ==========
+    if pos.numel() == 0:
+        # 每一行只有一段：全是 0
+        for b in range(B):
+            result[b].append(L)
+        return result
+
+    # ========== 找 1 的连续段结尾 ==========
+    is_end = torch.ones_like(pos, dtype=torch.bool)
+    same_batch = b_idx[1:] == b_idx[:-1]
+    consecutive = pos[1:] == pos[:-1] + 1
+    is_end[:-1] = ~(same_batch & consecutive)
+
+    end_b = b_idx[is_end]
+    end_pos = pos[is_end]
+
+    # ========== 根据结尾位置算段长 ==========
+    lengths = torch.empty_like(end_pos)
+    lengths[0] = end_pos[0] + 1
+    same_prev_batch = end_b[1:] == end_b[:-1]
+    lengths[1:] = torch.where(
+        same_prev_batch,
+        end_pos[1:] - end_pos[:-1],
+        end_pos[1:] + 1
+    )
+
+    # 收集已有段
+    for b, l in zip(end_b.tolist(), lengths.tolist()):
+        result[b].append(l)
+
+    # ========== 新增：补上“末尾连续 0”的段 ==========
+    # 对每个 batch，看最后一个 1 的位置
+    last_one_pos = torch.full((B,), -1, device=device)
+    last_one_pos[end_b] = end_pos  # 自动取每个 batch 的最后一次赋值
+
+    for b in range(B):
+        tail_len = L - (last_one_pos[b].item() + 1)
+        if tail_len > 0:
+            result[b].append(tail_len)
+
+    return result
+
+def trim_trailing_zeros(x: torch.Tensor):
+    """
+    x: (B, L), 每一行有连续后缀 0
+    return: List[List]
+    """
+    # 1. 计算每一行非零元素个数
+    lengths = (x != 0).sum(dim=-1)
+
+    # 2. 转成二维 list
+    result = [
+        x[b, :lengths[b]].tolist()
+        for b in range(x.size(0))
+    ]
+
+    return result
+
+def masked_minmax_norm_robust(
+    x: torch.Tensor,
+    mask: torch.Tensor,
+    out_min: float = 0.5,
+    out_max: float = 2.0,
+    eps: float = 1e-6,
+    constant_value: Optional[float] = None,
+    dim: Optional[int] = None,   # None: global over all masked elems; int: reduce along dim (e.g. -1 per-row)
+    keepdim: bool = True,
+    compute_dtype: torch.dtype = torch.float32,  # do reductions in this dtype for stability
+    handle_all_zero: str = "zero",  # "zero" | "constant" | "raise"
+):
+    """
+    Robust masked min-max normalization.
+    - If dim is None, compute global min/max over all elements with mask==1.
+      If dim is int, compute per-dim min/max (broadcastable).
+    - handle_all_zero: behavior when mask.sum()==0
+    """
+    if not mask.dtype == torch.bool:
+        mask = mask.bool()
+
+    # handle empty mask upfront
+    if not mask.any():
+        if handle_all_zero == "zero":
+            return torch.zeros_like(x)
+        elif handle_all_zero == "constant":
+            if constant_value is None:
+                constant_value = 0.5 * (out_min + out_max)
+            return torch.full_like(x, float(constant_value))
+        else:
+            raise ValueError("mask has no True elements")
+
+    # promote to compute dtype for reductions
+    x_compute = x.to(compute_dtype)
+
+    if dim is None:
+        # global
+        # masked reductions: use +/- inf trick but in compute dtype
+        inf = float("inf")
+        x_min_src = torch.where(mask, x_compute, torch.tensor(inf, dtype=compute_dtype, device=x.device))
+        x_max_src = torch.where(mask, x_compute, torch.tensor(-inf, dtype=compute_dtype, device=x.device))
+        min_val = x_min_src.min()
+        max_val = x_max_src.max()
+        # is_constant
+        is_constant = (max_val - min_val).abs() < eps
+        denom = (max_val - min_val).clamp(min=eps * (max_val.abs() + 1.0))
+        scale = (out_max - out_min) / denom
+        y = out_min + (x_compute - min_val) * scale
+        # mask out invalid positions
+        y = y * mask.to(y.dtype)
+        if is_constant:
+            if constant_value is None:
+                constant_value = 0.5 * (out_min + out_max)
+            y = torch.where(mask, torch.full_like(y, float(constant_value)), torch.zeros_like(y))
+        return y.to(x.dtype)
+    else:
+        # per-dim (e.g. dim=-1) reductions
+        # compute min/max along dim with masked fill
+        inf = float("inf")
+        x_min_src = torch.where(mask, x_compute, torch.tensor(inf, dtype=compute_dtype, device=x.device))
+        x_max_src = torch.where(mask, x_compute, torch.tensor(-inf, dtype=compute_dtype, device=x.device))
+        min_val = x_min_src.amin(dim=dim, keepdim=keepdim)
+        max_val = x_max_src.amax(dim=dim, keepdim=keepdim)
+        is_constant = (max_val - min_val).abs() < eps
+        denom = (max_val - min_val).clamp(min=eps * (max_val.abs() + 1.0))
+        scale = (out_max - out_min) / denom
+        y = out_min + (x_compute - min_val) * scale
+        y = y * mask.to(y.dtype)
+        if is_constant.any():
+            if constant_value is None:
+                constant_value = 0.5 * (out_min + out_max)
+            y = torch.where(is_constant, torch.full_like(y, float(constant_value)), y)
+        return y.to(x.dtype)

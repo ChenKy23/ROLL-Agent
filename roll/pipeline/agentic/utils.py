@@ -127,6 +127,24 @@ def grouped_reward_norm(batch: "DataProto", reward_normalization: RewardNormaliz
     batch.pop("sample_order_placeholder")
     return batch.batch.pop("grouped_rewards")
 
+def grouped_difficulty_compute(batch: "DataProto", grouping: str) -> torch.Tensor:
+    batch.batch["sample_order_placeholder"] = torch.arange(batch.batch.batch_size[0], device=batch.batch.device)
+    batch_grouped = batch.group_by(keys=grouping)
+    batch_list = []
+    for group_name, group_batch in batch_grouped.items():
+        # logger.info(f"goup_batch_score: {group_batch.batch['scores']}")
+        # logger.info(f"group_batch_score size: {group_batch.batch['scores'].size(0)}")
+        count = torch.sum(group_batch.batch["scores"] >= 1.0).item()
+        # logger.info(f"count: {count}")
+        grouped_difficulty = 2.0 * (count / group_batch.batch['scores'].size(0))
+        # logger.info(f"grouped_difficulty tensor: {torch.full(group_batch.batch['scores'].shape, grouped_difficulty)}")
+        group_batch.batch["grouped_difficulty"] = torch.full(group_batch.batch['scores'].shape, grouped_difficulty)
+        batch_list.append(group_batch)
+    batch = DataProto.concat(batch_list)
+    batch.reorder(indices=torch.argsort(batch.batch["sample_order_placeholder"]))
+    batch.pop("sample_order_placeholder")
+    return batch.batch.pop("grouped_difficulty").unsqueeze(-1)
+
 def build_state_group(batch: "DataProto") -> "DataProto":
     batch.batch["sample_order_placeholder"] = torch.arange(batch.batch.batch_size[0], device=batch.batch.device)
     batch_group_by_traj_group: Dict[str, DataProto] = batch.group_by(keys="traj_group_id")

@@ -28,14 +28,14 @@
 
 # Configuration
 SEARCH_URL=$SEARCH_URL
-MAX_ATTEMPTS=30
+MAX_ATTEMPTS=100
 RETRY_DELAY=10
 SAVE_PATH_RETRIEVER=$save_path # the path to save the retrieval files
 
 # Function to check if server is responding
 check_server() {
     local url=$1
-    curl -s -X POST "$url" -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1
+    no_proxy=localhost,127.0.0.1 curl -s -X POST "$url" -H "Content-Type: application/json" -d '{}' > /dev/null 2>&1
     return $?
 }
 
@@ -76,8 +76,8 @@ echo "=== Starting Local E5 Server ==="
 echo "Starting local E5 server..."
 
 # Server configuration
-index_file=$SAVE_PATH_RETRIEVER/e5_HNSW64.index
-corpus_file=$SAVE_PATH_RETRIEVER/wiki-18.jsonl
+index_file=/home/zhengguangmin/Kaiyuan/ROLL-Agent/user_examples/qwen3_agentic_gem/corpus/e5_HNSW64.index
+corpus_file=/home/zhengguangmin/Kaiyuan/ROLL-Agent/user_examples/qwen3_agentic_gem/corpus/wiki-18.jsonl
 retriever_name=e5
 retriever_path=${RETRIEVER_PATH:-intfloat/e5-base-v2}
 num_workers=1
