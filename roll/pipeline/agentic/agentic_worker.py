@@ -26,8 +26,8 @@ class ActorWorker(BaseActorWorker):
         ref_log_probs = data.batch["ref_log_probs"]
         old_log_probs = data.batch["old_log_probs"]
         advantages = data.batch["advantages"]
-        step_diff_pos_weights = data.batch["step_diff_pos_weights"]
-        step_ref_neg_weights = data.batch["step_ref_neg_weights"]
+        step_diff_pos_weights = data.batch["step_diff_pos_weights"].detach()
+        step_ref_neg_weights = data.batch["step_ref_neg_weights"].detach()
         response_step_lengths = data.batch["response_step_lengths"]
         step_lengths = data.batch["step_lengths"]
         step_lengths[:, 0] -= 1
